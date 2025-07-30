@@ -15,6 +15,22 @@ export interface StorageConfig {
 }
 
 /**
+ * Configuration for URL-based uploads
+ */
+export interface UrlUploadConfig {
+  /** maximum file size in bytes for URL uploads */
+  maxUrlFileSizeBytes: number;
+  /** allowed url schemes (e.g., ['https', 'http']) */
+  allowedUrlSchemes: string[];
+  /** timeout for url fetching in milliseconds */
+  urlFetchTimeoutMs: number;
+  /** whether to allow urls from any domain */
+  allowAllUrlDomains: boolean;
+  /** list of allowed domains (only used if allowedAllurlDomoains is false) */
+  allowedUrlDomains?: string[];
+}
+
+/**
  * Represents a structured IPFS resource with protocol, CID, and pathname
  */
 export interface Resource {
@@ -40,13 +56,25 @@ export class IpfsPathError extends Error {
 }
 
 /**
- * File to upload
+ * File to upload (base64 content)
  */
 export interface UploadFile {
   /** Name of the file */
   name: string;
   /** Content of the file (base64 encoded) */
   content: string;
+}
+
+/**
+ * File to upload from URL
+ */
+export interface UploadFileFromUrl {
+  /** Name of the file */
+  name: string;
+  /** url to fetch the file from */
+  url: string;
+  /** optional MIME type override */
+  mimeTyp?: string;
 }
 
 /**
@@ -107,6 +135,14 @@ export interface StorageClient {
    * @param options - Upload options
    */
   uploadFiles(files: UploadFile[], options?: UploadOptions): Promise<UploadResult>;
+
+  /**
+   * upload files to storage
+   * @param files - Array of files to upload from URLs
+   * @param options - Upload options
+   * @param urlConfig - URL upload configuration
+   */
+  uploadFiles(files: UploadFileFromUrl[], options?: UploadOptions, urlConfig?: UrlUploadConfig): Promise<UploadResult>;
 
   /**
    * Retrieve a file from storage

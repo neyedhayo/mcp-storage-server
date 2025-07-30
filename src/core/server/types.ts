@@ -16,6 +16,34 @@ export interface McpServerConfig {
   maxFileSizeBytes: number;
   /** REST endpoint */
   endpoint?: string;
+  
+  // URL Upload Configuration (Phase 1)
+  /** Maximum file size in bytes for URL uploads */
+  maxUrlFileSizeBytes: number;
+  /** Allowed URL schemes (e.g., ['https', 'http']) */
+  allowedUrlSchemes: string[];
+  /** Timeout for URL fetching in milliseconds */
+  urlFetchTimeoutMs: number;
+  /** Whether to allow URLs from any domain */
+  allowAllUrlDomains: boolean;
+  /** List of allowed domains (only used if allowAllUrlDomains is false) */
+  allowedUrlDomains?: string[];
+}
+
+/**
+ * Configuration for URL-based uploads
+ */
+export interface UrlUploadConfig {
+  /** Maximum file size in bytes for URL uploads */
+  maxUrlFileSizeBytes: number;
+  /** Allowed URL schemes (e.g., ['https', 'http']) */
+  allowedUrlSchemes: string[];
+  /** Timeout for URL fetching in milliseconds */  
+  urlFetchTimeoutMs: number;
+  /** Whether to allow URLs from any domain */
+  allowAllUrlDomains: boolean;
+  /** List of allowed domains (only used if allowAllUrlDomains is false) */
+  allowedUrlDomains?: string[];
 }
 
 /**

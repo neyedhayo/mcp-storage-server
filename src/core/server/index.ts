@@ -5,6 +5,7 @@ import { startSSETransport } from './transports/sse.js';
 import { startRestTransport } from './transports/rest.js';
 import { McpServerConfig } from './types.js';
 import { StorageConfig } from '../storage/types.js';
+
 /**
  * Creates the MCP Storage Server.
  * Registers all resources, tools, and prompts.
@@ -22,7 +23,7 @@ async function startMCPServer(mcpConfig: McpServerConfig, storageConfig: Storage
     });
     // Register all resources, tools, and prompts
     // registerResources(server);
-    registerTools(server, storageConfig);
+    registerTools(server, storageConfig, mcpConfig); // Pass mcpConfig for URL upload configuration
     // registerPrompts(server);
 
     if (mcpConfig.transportMode === 'sse') {

@@ -5,6 +5,8 @@ import {
   RetrieveResult,
   UploadOptions,
   UploadFile,
+  UploadFileFromUrl,
+  UrlUploadConfig,
   RetrieveOptions,
 } from './types.js';
 import * as Storage from '@storacha/client';
@@ -144,7 +146,7 @@ export class StorachaClient implements StorageClient {
   }
 
   /**
-   * Upload files to Storacha network
+   * Upload files to Storacha network from base64 content
    * The Storage Client needs to be initialized to upload files.
    *
    * @param files - Array of files to upload
@@ -165,9 +167,191 @@ export class StorachaClient implements StorageClient {
       return new File([bytes], file.name);
     });
 
+    return this.performUpload(fileObjects, options);
+  }
+
+  /**
+   * Upload files to Storacha network from URLs (Phase 1)
+   * @param files - Array of files to upload from URLs
+   * @param options - Upload options
+   * @param urlConfig - URL upload configuration
+   */
+  async uploadFilesFromUrls(
+    files: UploadFileFromUrl[], 
+    options: UploadOptions = {},
+    urlConfig?: UrlUploadConfig
+  ): Promise<UploadResult> {
+    if (!this.initialized || !this.storage) {
+      throw new Error('Client not initialized');
+    }
+
+    if (options.signal?.aborted) {
+      throw new Error('Upload aborted');
+    }
+
+    // Fetch files from URLs and convert to File objects
+    const fileObjects = await Promise.all(
+      files.map(async (fileSpec) => {
+        const file = await this.fetchFileFromUrl(fileSpec, urlConfig, options.signal);
+        return file;
+      })
+    );
+
+    return this.performUpload(fileObjects, options);
+  }
+
+  /**
+   * Fetch a file from a URL with validation and streaming (Phase 1)
+   */
+  private async fetchFileFromUrl(
+    fileSpec: UploadFileFromUrl,
+    urlConfig?: UrlUploadConfig,
+    signal?: AbortSignal
+  ): Promise<File> {
+    const { url: urlString, name, mimeType } = fileSpec;
+
+    // Parse URL
+    let url: URL;
+    try {
+      url = new URL(urlString);
+    } catch (error) {
+      throw new Error(`Invalid URL: ${urlString}`);
+    }
+
+    // Validate URL scheme
+    if (urlConfig?.allowedUrlSchemes && !urlConfig.allowedUrlSchemes.includes(url.protocol.slice(0, -1))) {
+      throw new Error(
+        `URL scheme '${url.protocol.slice(0, -1)}' is not allowed. Allowed schemes: ${urlConfig.allowedUrlSchemes.join(', ')}`
+      );
+    }
+
+    // Validate domain
+    if (urlConfig && !urlConfig.allowAllUrlDomains) {
+      if (!urlConfig.allowedUrlDomains || urlConfig.allowedUrlDomains.length === 0) {
+        throw new Error('No domains are allowed for URL uploads');
+      }
+      
+      const hostname = url.hostname.toLowerCase();
+      const isAllowed = urlConfig.allowedUrlDomains.some(allowedDomain => 
+        hostname === allowedDomain.toLowerCase() || 
+        hostname.endsWith(`.${allowedDomain.toLowerCase()}`)
+      );
+      
+      if (!isAllowed) {
+        throw new Error(
+          `Domain '${hostname}' is not allowed. Allowed domains: ${urlConfig.allowedUrlDomains.join(', ')}`
+        );
+      }
+    }
+
+    // Create abort controller for timeout
+    const controller = new AbortController();
+    const timeoutId = urlConfig?.urlFetchTimeoutMs 
+      ? setTimeout(() => controller.abort(), urlConfig.urlFetchTimeoutMs)
+      : null;
+
+    // Combine timeout signal with external signal
+    const combinedSignal = signal || controller.signal;
+    if (signal) {
+      signal.addEventListener('abort', () => controller.abort());
+    }
+
+    try {
+      // First, make a HEAD request to check content length
+      const headResponse = await fetch(url, {
+        method: 'HEAD',
+        signal: combinedSignal,
+      });
+
+      if (!headResponse.ok) {
+        throw new Error(`Failed to fetch URL headers: ${headResponse.status} ${headResponse.statusText}`);
+      }
+
+      // Check content length
+      const contentLength = headResponse.headers.get('content-length');
+      if (contentLength && urlConfig?.maxUrlFileSizeBytes) {
+        const size = parseInt(contentLength, 10);
+        if (size > urlConfig.maxUrlFileSizeBytes) {
+          throw new Error(
+            `File size (${size} bytes) exceeds maximum allowed size (${urlConfig.maxUrlFileSizeBytes} bytes)`
+          );
+        }
+      }
+
+      // Get the actual file
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: combinedSignal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
+      }
+
+      // Get content type
+      const contentType = mimeType || response.headers.get('content-type') || 'application/octet-stream';
+
+      // Stream the response body
+      if (!response.body) {
+        throw new Error('Response body is empty');
+      }
+
+      // Convert stream to ArrayBuffer with size checking
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalSize = 0;
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          totalSize += value.length;
+          
+          // Check size limit during download
+          if (urlConfig?.maxUrlFileSizeBytes && totalSize > urlConfig.maxUrlFileSizeBytes) {
+            throw new Error(
+              `File size (${totalSize} bytes) exceeds maximum allowed size (${urlConfig.maxUrlFileSizeBytes} bytes)`
+            );
+          }
+
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      // Combine all chunks
+      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const combined = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      // Create File object
+      return new File([combined], name, { type: contentType });
+
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('URL fetch timeout or aborted');
+      }
+      throw error;
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
+  /**
+   * Common upload logic for both base64 and URL uploads
+   */
+  private async performUpload(fileObjects: File[], options: UploadOptions): Promise<UploadResult> {
     const uploadedFiles: Map<string, UnknownLink> = new Map();
 
-    const root = await this.storage.uploadDirectory(fileObjects, {
+    const root = await this.storage!.uploadDirectory(fileObjects, {
       // Only set pieceHasher as undefined if we don't want to publish to Filecoin
       ...(options.publishToFilecoin === true ? {} : { pieceHasher: undefined }),
       retries: options.retries ?? 3,
